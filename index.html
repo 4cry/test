@@ -3,278 +3,139 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width,initial-scale=1" />
-  <title>Android Motion Trail — 3D Trail from Sensors</title>
+  <title>3D Motion Trail (Sensor Fusion + GPS)</title>
   <style>
-    /* Minimal app styling */
-    html,body{height:100%;margin:0;font-family:Inter,system-ui,Segoe UI,Roboto,Arial}
+    html,body{height:100%;margin:0;font-family:Inter,system-ui,Segoe UI,Roboto,Arial;background:#0b1220;color:#fff;overflow:hidden}
     #app{display:flex;flex-direction:column;height:100%}
-    header{padding:10px;background:#0b1220;color:#fff;display:flex;align-items:center;gap:12px}
-    header h1{font-size:16px;margin:0}
-    main{flex:1;display:flex}
-    #viewport{flex:1;background:#111}
-    #controls{width:320px;background:#0f1724;color:#dbeafe;padding:12px;box-sizing:border-box}
-    button{display:inline-block;margin:6px 4px;padding:8px 12px;border-radius:8px;border:0;cursor:pointer}
+    header{padding:8px;background:#0b1220;color:#fff;display:flex;align-items:center;gap:8px;flex-wrap:wrap}
+    header h1{font-size:15px;margin:0}
+    main{flex:1;display:flex;flex-direction:row;height:100%;overflow:hidden}
+    #viewport{flex:1;background:#111;touch-action:none}
+    #controls{width:320px;background:#0f1724;color:#dbeafe;padding:10px;box-sizing:border-box;overflow:auto}
+    button{margin:4px;padding:8px 10px;border-radius:8px;border:0;cursor:pointer}
     .btn-start{background:#10b981;color:#04201a}
     .btn-stop{background:#ef4444;color:#fff}
     .btn-secondary{background:#374151;color:#fff}
-    .row{margin-bottom:8px}
-    pre{white-space:pre-wrap;background:#020617;padding:8px;border-radius:6px;max-height:140px;overflow:auto}
-    label{font-size:13px;display:block;margin-bottom:4px}
+    .fullscreen-btn{background:#2563eb;color:#fff;}
+    pre{white-space:pre-wrap;background:#020617;padding:8px;border-radius:6px;max-height:120px;overflow:auto;font-size:12px}
+    label{font-size:13px;display:block;margin-bottom:2px}
     small{opacity:.7}
+    @media(max-width:800px){#controls{display:none} header{font-size:13px} #viewport{width:100%}}
   </style>
 </head>
 <body>
   <div id="app">
     <header>
-      <h1>Android-only: 3D Motion Trail (Accelerometer + Gyro + Compass)</h1>
-      <small>Tap <b>Start</b> on your Android phone. Must be served over HTTPS or from localhost.</small>
+      <h1>3D Motion Trail (Android Sensor Fusion + GPS)</h1>
+      <button id="btnFullscreen" class="fullscreen-btn">Fullscreen</button>
+      <small>Works best on Android Chrome (requires HTTPS)</small>
     </header>
-
     <main>
       <div id="viewport"></div>
       <aside id="controls">
-        <div class="row">
-          <button id="btnStart" class="btn-start">Start</button>
-          <button id="btnStop" class="btn-stop">Stop</button>
-          <button id="btnReset" class="btn-secondary">Reset</button>
-        </div>
-        <div class="row">
-          <label>Sampling frequency (Hz)</label>
-          <input id="freq" type="number" value="60" min="10" max="200" style="width:100%" />
-        </div>
-        <div class="row">
-          <label>Velocity decay (0-1, higher = less damping)</label>
-          <input id="velDecay" type="range" min="0" max="0.999" step="0.001" value="0.98" style="width:100%" />
-        </div>
-        <div class="row">
-          <label>Sensor status</label>
-          <pre id="status">idle</pre>
-        </div>
-        <div class="row">
-          <label>Live sensor readouts</label>
-          <pre id="readouts">—</pre>
-        </div>
-        <div class="row">
-          <small>Notes:
-            <ul>
-              <li>Android (Chrome) is the target — test on a modern Android device.</li>
-              <li>Position from accelerometer integration will drift. Use the Reset button to re-centre.</li>
-              <li>Serve over HTTPS (or open as file on Chrome with appropriate flags). Localhost also works.</li>
-            </ul>
-          </small>
-        </div>
+        <button id="btnStart" class="btn-start">Start</button>
+        <button id="btnStop" class="btn-stop">Stop</button>
+        <button id="btnReset" class="btn-secondary">Reset</button>
+        <label>Sampling rate (Hz)</label>
+        <input id="freq" type="number" value="60" min="10" max="200" style="width:100%">
+        <label>Velocity damping</label>
+        <input id="velDecay" type="range" min="0" max="0.999" step="0.001" value="0.98" style="width:100%">
+        <label>Status</label>
+        <pre id="status">idle</pre>
+        <label>Readouts</label>
+        <pre id="readouts">—</pre>
       </aside>
     </main>
   </div>
-
-  <!-- Three.js from CDN -->
   <script src="https://cdn.jsdelivr.net/npm/three@0.158.0/build/three.min.js"></script>
-
   <script>
-  // --- Helper: DOM ---
-  const statusEl = document.getElementById('status');
-  const readoutsEl = document.getElementById('readouts');
-  const btnStart = document.getElementById('btnStart');
-  const btnStop = document.getElementById('btnStop');
-  const btnReset = document.getElementById('btnReset');
-  const freqInput = document.getElementById('freq');
-  const velDecayInput = document.getElementById('velDecay');
+    const statusEl=document.getElementById('status'),readoutsEl=document.getElementById('readouts');
+    const btnStart=document.getElementById('btnStart'),btnStop=document.getElementById('btnStop'),btnReset=document.getElementById('btnReset'),btnFullscreen=document.getElementById('btnFullscreen');
+    const freqInput=document.getElementById('freq'),velDecayInput=document.getElementById('velDecay');
 
-  // --- Three.js scene setup ---
-  const container = document.getElementById('viewport');
-  const scene = new THREE.Scene();
-  const camera = new THREE.PerspectiveCamera(60, 1, 0.01, 1000);
-  camera.position.set(0, 1.5, 4);
-  const renderer = new THREE.WebGLRenderer({antialias:true});
-  renderer.setSize(container.clientWidth, container.clientHeight);
-  container.appendChild(renderer.domElement);
-  window.addEventListener('resize', ()=>{
-    renderer.setSize(container.clientWidth, container.clientHeight);
-    camera.aspect = container.clientWidth/container.clientHeight; camera.updateProjectionMatrix();
-  });
+    const container=document.getElementById('viewport');
+    const scene=new THREE.Scene();
+    const camera=new THREE.PerspectiveCamera(60,1,0.01,2000);
+    camera.position.set(0,1.5,4);
+    const renderer=new THREE.WebGLRenderer({antialias:true});
+    renderer.setSize(container.clientWidth,container.clientHeight);
+    container.appendChild(renderer.domElement);
 
-  // grid and axes
-  const grid = new THREE.GridHelper(10, 20, 0x444444, 0x222222); scene.add(grid);
-  const axes = new THREE.AxesHelper(1.2); scene.add(axes);
+    window.addEventListener('resize',()=>{renderer.setSize(container.clientWidth,container.clientHeight);camera.aspect=container.clientWidth/container.clientHeight;camera.updateProjectionMatrix();});
 
-  // trail geometry
-  const maxPoints = 10000;
-  const positions = new Float32Array(maxPoints*3);
-  const trailGeom = new THREE.BufferGeometry();
-  trailGeom.setAttribute('position', new THREE.BufferAttribute(positions, 3));
-  trailGeom.setDrawRange(0, 0);
-  const trailMat = new THREE.LineBasicMaterial({color:0x00ffcc, linewidth:2});
-  const trail = new THREE.Line(trailGeom, trailMat); scene.add(trail);
+    scene.add(new THREE.GridHelper(10,20,0x444444,0x222222));scene.add(new THREE.AxesHelper(1.2));
+    const maxPoints=15000;const positions=new Float32Array(maxPoints*3);
+    const geom=new THREE.BufferGeometry();geom.setAttribute('position',new THREE.BufferAttribute(positions,3));
+    geom.setDrawRange(0,0);
+    const mat=new THREE.LineBasicMaterial({color:0x00ffcc});
+    const line=new THREE.Line(geom,mat);scene.add(line);
+    const marker=new THREE.Mesh(new THREE.SphereGeometry(0.06,12,12),new THREE.MeshBasicMaterial({color:0xff6b6b}));scene.add(marker);
 
-  // phone marker
-  const phoneMarker = new THREE.Mesh(new THREE.SphereGeometry(0.06, 12, 12), new THREE.MeshBasicMaterial({color:0xff6b6b}));
-  scene.add(phoneMarker);
+    let isPointerDown=false,lastX=0,lastY=0,rotX=0,rotY=0;
+    renderer.domElement.addEventListener('pointerdown',e=>{isPointerDown=true;lastX=e.clientX;lastY=e.clientY;});
+    window.addEventListener('pointerup',()=>isPointerDown=false);
+    window.addEventListener('pointermove',e=>{if(!isPointerDown)return;const dx=(e.clientX-lastX)/200,dy=(e.clientY-lastY)/200;lastX=e.clientX;lastY=e.clientY;rotY+=dx;rotX+=dy;});
 
-  // simple orbit controls (lightweight)
-  let isPointerDown=false, lastX=0,lastY=0, rotX=0,rotY=0;
-  renderer.domElement.addEventListener('pointerdown', e=>{isPointerDown=true; lastX=e.clientX; lastY=e.clientY});
-  window.addEventListener('pointerup', ()=>isPointerDown=false);
-  window.addEventListener('pointermove', e=>{ if(!isPointerDown) return; const dx=(e.clientX-lastX)/200; const dy=(e.clientY-lastY)/200; lastX=e.clientX; lastY=e.clientY; rotY+=dx; rotX+=dy; });
+    let orientationSensor,accelSensor,gyroSensor,magSensor;let lastTs=null;let position=new THREE.Vector3(),velocity=new THREE.Vector3(),quat=new THREE.Quaternion();let pointCount=0;let gpsPos=null;
 
-  // --- Sensor integration state ---
-  let sensorActive = false;
-  let accelSensor = null, gyroSensor = null, magSensor = null, orientationSensor = null;
-  let lastTs = null;
-  let position = new THREE.Vector3(0,0,0);
-  let velocity = new THREE.Vector3(0,0,0);
-  let quat = new THREE.Quaternion(); // device -> world
-  let pointCount = 0;
+    function appendPoint(v){if(pointCount>=maxPoints){for(let i=0;i<(maxPoints-1)*3;i++)positions[i]=positions[i+3];pointCount=maxPoints-1;}positions[pointCount*3]=v.x;positions[pointCount*3+1]=v.y;positions[pointCount*3+2]=v.z;pointCount++;geom.attributes.position.needsUpdate=true;geom.setDrawRange(0,pointCount);}
 
-  function appendPoint(v){
-    if(pointCount >= maxPoints) {
-      // shift left (simple ring buffer could be used, but we'll overwrite from start)
-      for(let i=0;i<(maxPoints-1)*3;i++) positions[i]=positions[i+3];
-      pointCount = maxPoints-1;
-    }
-    positions[pointCount*3] = v.x; positions[pointCount*3+1] = v.y; positions[pointCount*3+2] = v.z;
-    pointCount++;
-    trailGeom.attributes.position.needsUpdate = true;
-    trailGeom.setDrawRange(0, pointCount);
-  }
+    function resetScene(){position.set(0,0,0);velocity.set(0,0,0);pointCount=0;positions.fill(0);geom.setDrawRange(0,0);geom.attributes.position.needsUpdate=true;}
+    btnReset.onclick=()=>{resetScene();statusEl.textContent='reset';};
 
-  // Reset function
-  function resetScene(){
-    position.set(0,0,0); velocity.set(0,0,0); pointCount=0; for(let i=0;i<positions.length;i++) positions[i]=0; trailGeom.attributes.position.needsUpdate = true; trailGeom.setDrawRange(0,0);
-  }
-  btnReset.addEventListener('click', ()=>{ resetScene(); statusEl.textContent='reset'; });
+    async function startSensors(){
+      const freq=Number(freqInput.value)||60;statusEl.textContent='starting sensors...';
+      try{
+        if('AbsoluteOrientationSensor' in window){
+          orientationSensor=new AbsoluteOrientationSensor({frequency:freq});
+          accelSensor=new LinearAccelerationSensor({frequency:freq});
+          gyroSensor=new Gyroscope({frequency:freq});
+          magSensor=new Magnetometer({frequency:freq});
 
-  // --- Sensor handling ---
-  async function startSensors(){
-    if(sensorActive) return;
-    const freq = Number(freqInput.value) || 60;
-    lastTs = null;
-    try{
-      // Try Generic Sensor API first (recommended)
-      if('AbsoluteOrientationSensor' in window && 'Accelerometer' in window){
-        statusEl.textContent = 'attempting Generic Sensor API';
+          orientationSensor.onreading=()=>{quat.set(...orientationSensor.quaternion);};
+          accelSensor.onreading=()=>{updateFusion(accelSensor.x,accelSensor.y,accelSensor.z);};
 
-        orientationSensor = new AbsoluteOrientationSensor({frequency:freq});
-        accelSensor = new Accelerometer({frequency:freq});
-        try{ magSensor = new Magnetometer({frequency:freq}); } catch(e) { magSensor = null; }
-
-        orientationSensor.addEventListener('reading', ()=>{ quat.set(orientationSensor.quaternion[0], orientationSensor.quaternion[1], orientationSensor.quaternion[2], orientationSensor.quaternion[3]); });
-        accelSensor.addEventListener('reading', ()=>{ handleAccel(accelSensor.x, accelSensor.y, accelSensor.z); });
-
-        orientationSensor.addEventListener('error', e=>{ console.warn('orientation error', e); });
-        accelSensor.addEventListener('error', e=>{ console.warn('accel error', e); });
-
-        await Promise.all([orientationSensor.start(), accelSensor.start(), magSensor ? magSensor.start().catch(()=>{}) : Promise.resolve()]);
-        statusEl.textContent = 'sensors running (Generic Sensor API)';
-        sensorActive = true;
-      } else if ('DeviceMotionEvent' in window) {
-        // Fallback: DeviceMotionEvent (older, widely supported on Android)
-        statusEl.textContent = 'using DeviceMotionEvent fallback';
-        // Some browsers require a permission request (mostly iOS), but calling inside gesture is fine
-        if(typeof DeviceMotionEvent.requestPermission === 'function'){
-          const resp = await DeviceMotionEvent.requestPermission();
-          if(resp !== 'granted') { statusEl.textContent='permission denied'; return; }
+          orientationSensor.start();accelSensor.start();gyroSensor.start();magSensor.start();
+          statusEl.textContent='Generic Sensor API active';
+        } else if('DeviceMotionEvent' in window){
+          window.addEventListener('devicemotion',e=>{const a=e.accelerationIncludingGravity||e.acceleration||{x:0,y:0,z:0};updateFusion(a.x,a.y,a.z,e.timeStamp);});
+          window.addEventListener('deviceorientation',e=>{quat.copy(eulerToQuaternion(e.alpha*Math.PI/180,e.beta*Math.PI/180,e.gamma*Math.PI/180));});
+          statusEl.textContent='Using DeviceMotion fallback';
         }
-        window.addEventListener('devicemotion', devicemotionHandler);
-        window.addEventListener('deviceorientationabsolute' in window ? 'deviceorientationabsolute':'deviceorientation', orientationHandler);
-        sensorActive = true;
-      } else {
-        statusEl.textContent = 'no supported sensors found on this browser';
+        // GPS
+        if(navigator.geolocation){navigator.geolocation.watchPosition(pos=>{gpsPos={lat:pos.coords.latitude,lon:pos.coords.longitude,alt:pos.coords.altitude||0,acc:pos.coords.accuracy};},err=>console.warn('GPS error',err),{enableHighAccuracy:true,maximumAge:1000,timeout:5000});}
+      }catch(err){statusEl.textContent='sensor start failed: '+err.message;}
+    }
+
+    function eulerToQuaternion(a,b,c){const cz=Math.cos(a/2),sz=Math.sin(a/2),cx=Math.cos(b/2),sx=Math.sin(b/2),cy=Math.cos(c/2),sy=Math.sin(c/2);const qz=new THREE.Quaternion(0,0,sz,cz),qx=new THREE.Quaternion(sx,0,0,cx),qy=new THREE.Quaternion(0,sy,0,cy);return qz.multiply(qx).multiply(qy);}
+
+    function updateFusion(ax,ay,az,ts=performance.now()){
+      if(!lastTs)lastTs=ts;const dt=(ts-lastTs)/1000;lastTs=ts;if(dt<=0)return;
+      const acc=new THREE.Vector3(ax,ay,az).applyQuaternion(quat);
+      const gravity=new THREE.Vector3(0,0,9.80665);acc.sub(gravity);
+      velocity.addScaledVector(acc,dt).multiplyScalar(Number(velDecayInput.value));
+      position.addScaledVector(velocity,dt);
+      // combine GPS if available
+      if(gpsPos){
+        // fuse GPS slowly (simple complementary filter)
+        const gpsScale=111111; // m per degree approx
+        const gpsX=gpsPos.lon*gpsScale*Math.cos(gpsPos.lat*Math.PI/180);
+        const gpsZ=gpsPos.lat*gpsScale;
+        const gpsY=gpsPos.alt||0;
+        position.lerp(new THREE.Vector3(gpsX%1000,gpsY,gpsZ%1000),0.01);
       }
-    }catch(err){ console.error(err); statusEl.textContent = 'sensor error: '+err.message; }
-  }
+      marker.position.copy(position);appendPoint(position);
+      readoutsEl.textContent=`acc: ${ax.toFixed(2)},${ay.toFixed(2)},${az.toFixed(2)}\nvel: ${velocity.x.toFixed(2)},${velocity.y.toFixed(2)},${velocity.z.toFixed(2)}\npos: ${position.x.toFixed(2)},${position.y.toFixed(2)},${position.z.toFixed(2)}\ngps: ${gpsPos?gpsPos.lat.toFixed(5)+','+gpsPos.lon.toFixed(5):'—'}`;
+    }
 
-  function stopSensors(){
-    if(!sensorActive) return;
-    try{
-      if(orientationSensor) { orientationSensor.stop(); orientationSensor = null; }
-      if(accelSensor) { accelSensor.stop(); accelSensor = null; }
-      if(magSensor) { magSensor.stop(); magSensor = null; }
-      if('DeviceMotionEvent' in window) { window.removeEventListener('devicemotion', devicemotionHandler); window.removeEventListener('deviceorientation','orientationHandler'); }
-    }catch(e){}
-    sensorActive=false; statusEl.textContent='stopped';
-  }
+    function animate(){requestAnimationFrame(animate);camera.position.set(Math.sin(rotY)*4,1.5+rotX*2,Math.cos(rotY)*4);camera.lookAt(0,0,0);renderer.render(scene,camera);}animate();
 
-  function devicemotionHandler(e){
-    const a = e.accelerationIncludingGravity || e.acceleration || {x:0,y:0,z:0};
-    handleAccel(a.x||0,a.y||0,a.z||0, e.timeStamp);
-  }
-  function orientationHandler(e){
-    // deviceorientation provides Euler angles; convert to quaternion
-    const alpha = (e.alpha||0) * Math.PI/180.0; // z
-    const beta  = (e.beta||0)  * Math.PI/180.0; // x
-    const gamma = (e.gamma||0) * Math.PI/180.0; // y
-    // use intrinsic Tait-Bryan Z-X'-Y'' (alpha, beta, gamma)
-    const _q = eulerToQuaternion(alpha,beta,gamma);
-    quat.copy(_q);
-  }
+    btnStart.onclick=()=>startSensors();btnStop.onclick=()=>{orientationSensor?.stop();accelSensor?.stop();gyroSensor?.stop();magSensor?.stop();statusEl.textContent='stopped';};
 
-  // Euler -> quaternion helper (Z X Y sequence approximation)
-  function eulerToQuaternion(z,x,y){
-    const cz = Math.cos(z/2), sz=Math.sin(z/2);
-    const cx = Math.cos(x/2), sx=Math.sin(x/2);
-    const cy = Math.cos(y/2), sy=Math.sin(y/2);
-    // q = qz * qx * qy
-    const qz = new THREE.Quaternion(0,0,sz,cz);
-    const qx = new THREE.Quaternion(sx,0,0,cx);
-    const qy = new THREE.Quaternion(0,sy,0,cy);
-    return qz.multiply(qx).multiply(qy);
-  }
-
-  // Main accel handler: accel in device coordinates (m/s^2)
-  function handleAccel(ax,ay,az, ts=performance.now()){
-    // dt
-    if(!lastTs) lastTs = ts; const dt = (ts - lastTs)/1000.0; lastTs = ts; if(dt <= 0) return;
-    // construct device accel as vector
-    const aDev = new THREE.Vector3(ax||0, ay||0, az||0);
-
-    // rotate to world coordinates using quaternion (device -> world)
-    const aWorld = aDev.clone().applyQuaternion(quat);
-
-    // remove gravity (assumes world +Y up? We'll assume gravity along -Z in device-world mapping could vary)
-    // Common approach: subtract (0,0,9.80665) in world frame
-    const gravity = new THREE.Vector3(0, 0, 9.80665);
-    aWorld.sub(gravity);
-
-    // integrate to velocity and position (simple Euler)
-    // apply small threshold to avoid tiny noise
-    if(aWorld.length() < 0.02) aWorld.set(0,0,0);
-    velocity.addScaledVector(aWorld, dt);
-    // damping to reduce drift
-    const decay = 1 - (1 - Number(velDecayInput.value));
-    velocity.multiplyScalar(Number(velDecayInput.value));
-    position.addScaledVector(velocity, dt);
-
-    // update visual objects
-    phoneMarker.position.copy(position);
-    appendPoint(position);
-
-    // update readouts
-    readoutsEl.textContent = `dt: ${dt.toFixed(3)}s\naccel(dev): ${ax.toFixed(3)}, ${ay.toFixed(3)}, ${az.toFixed(3)}\naccel(world): ${aWorld.x.toFixed(3)}, ${aWorld.y.toFixed(3)}, ${aWorld.z.toFixed(3)}\nvelocity: ${velocity.x.toFixed(3)}, ${velocity.y.toFixed(3)}, ${velocity.z.toFixed(3)}\nposition: ${position.x.toFixed(3)}, ${position.y.toFixed(3)}, ${position.z.toFixed(3)}`;
-  }
-
-  // animation loop
-  function animate(){
-    requestAnimationFrame(animate);
-    // apply simple orbit rotation
-    const target = new THREE.Vector3(0,0,0);
-    const r = new THREE.Euler(rotX, rotY, 0, 'YXZ');
-    camera.position.set(Math.sin(rotY)*4, 1.5+rotX*2, Math.cos(rotY)*4);
-    camera.lookAt(target);
-    renderer.render(scene, camera);
-  }
-  animate();
-
-  // wire UI
-  btnStart.addEventListener('click', async ()=>{
-    statusEl.textContent = 'starting...';
-    try{ await startSensors(); } catch(e){ statusEl.textContent = 'start failed: '+e.message }
-  });
-  btnStop.addEventListener('click', ()=>{ stopSensors(); });
-
-  // Prevent accidental sleep on Android? We can't programmatically prevent it in web.
-
-  // Compatibility and caution notes in console
-  console.log('Page loaded. Note: this demo integrates accelerometer -> position which drifts quickly. Use Reset to re-centre.');
+    btnFullscreen.onclick=()=>{
+      if(!document.fullscreenElement){container.requestFullscreen?.();document.querySelector('header').style.display='none';document.querySelector('#controls').style.display='none';}
+      else{document.exitFullscreen?.();document.querySelector('header').style.display='flex';document.querySelector('#controls').style.display='block';}
+    };
   </script>
 </body>
 </html>
